@@ -57,6 +57,10 @@ except Exception as e:
     print("❌ ERREUR INITIALISATION VERTEX :")
     print(e)
 
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({"message": "OCR Service is running!", "status": "online"})
+
 @app.route('/scan', methods=['POST'])
 def scan_image():
     global model
