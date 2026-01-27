@@ -90,10 +90,12 @@ def scan_image():
 
         print("🚀 Envoi à Vertex AI...")
         
-        # Configuration pour limiter les tokens et optimiser l'OCR
+        # Optimal OCR Configuration: Top_K 1 forces the model to pick only the most certain character
         generation_config = {
-            "max_output_tokens": 8192,  # Limite de sécurité pour économiser
-            "temperature": 0,           # 0 est idéal pour l'OCR (plus précis/déterministe)
+            "max_output_tokens": 8192,
+            "temperature": 0,
+            "top_p": 1.0,
+            "top_k": 1,
         }
 
         # Retry logic for 429 Resource Exhausted
