@@ -86,14 +86,19 @@ def scan_image():
             mime_type=file.content_type if file.content_type else "image/jpeg"
         )
 
-        prompt = "Extract all text from  whitout any comments or explanations."
+        prompt = """OCR the provided image. Extract all text exactly as it appears. 
+        Maintain original formatting and line breaks. 
+        Do not add any comments, explanations, or introductory text. 
+        Accuracy is mandatory: transcribe every character correctly."""
 
-        print("🚀 Envoi à Vertex AI...")
+        print("🚀 Envoi à Vertex AI (Gemini 2.5 Flash Optimized)...")
         
-        # Configuration pour limiter les tokens et optimiser l'OCR
+        # Optimal OCR Configuration: Temperature 0 + Top_K 1 for maximum precision
         generation_config = {
-            "max_output_tokens": 8192,  # Limite de sécurité pour économiser
-            "temperature": 0,           # 0 est idéal pour l'OCR (plus précis/déterministe)
+            "max_output_tokens": 8192,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "top_k": 1,
         }
 
         # Retry logic for 429 Resource Exhausted
