@@ -45,7 +45,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # UPDATE: Using Gemini 2.0 Flash (Recommended upgrade)
+    # UPDATE: Using a specific stable version
     model_name = "gemini-2.5-flash" 
     
     print(f"⏳ Chargement du modèle {model_name}...")
