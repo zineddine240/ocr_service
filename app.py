@@ -45,7 +45,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # UPDATE: Using a specific stable version
+    # Utilisation de Gemini 2.5 Flash
     model_name = "gemini-2.5-flash" 
     
     print(f"⏳ Chargement du modèle {model_name}...")
@@ -86,14 +86,15 @@ def scan_image():
             mime_type=file.content_type if file.content_type else "image/jpeg"
         )
 
-        prompt = "Extract all text from this image exactly as it appears. No markdown, no comments."
+        # Prompt optimisé pour la fidélité
+        prompt = "OCR this image. Extract all text exactly as it appears, maintaining the original layout, line breaks, and formatting. Do not add any comments or explanations."
 
-        print("🚀 Envoi à Vertex AI...")
+        print("🚀 Envoi à Vertex AI (Mode Haute Fidélité)...")
         
-        # Optimal OCR Configuration: Top_K 1 forces the model to pick only the most certain character
+        # Configuration de précision
         generation_config = {
             "max_output_tokens": 8192,
-            "temperature": 0,
+            "temperature": 0.0,
             "top_p": 1.0,
             "top_k": 1,
         }
