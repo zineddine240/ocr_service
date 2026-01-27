@@ -58,7 +58,12 @@ except Exception as e:
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({"message": "OCR Service is running!", "status": "online"})
+    return jsonify({
+        "message": "OCR Service is running!", 
+        "status": "online", 
+        "deployed_model": "gemini-2.5-flash",
+        "last_update": "14:26"
+    })
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
