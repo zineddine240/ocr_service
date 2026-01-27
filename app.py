@@ -45,9 +45,8 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # MODIFICATION : Utilisation de la version 001 validée
-    # Utilisation du modèle Gemini 2.0 Flash
-    model_name = "gemini-2.0-flash-001" 
+    # UPDATE: Using Gemini 2.0 Flash (Recommended upgrade)
+    model_name = "gemini-2.5-flash" 
     
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
@@ -82,10 +81,16 @@ def scan_image():
             mime_type=file.content_type if file.content_type else "image/jpeg"
         )
 
-        prompt = "Extract all text from this image exactly as it appears. No markdown, no comments."
+        prompt = "Extract all text from  whitout any comments or explanations."
 
         print("🚀 Envoi à Vertex AI...")
         
+        # Configuration pour limiter les tokens et optimiser l'OCR
+        generation_config = {
+            "max_output_tokens": 8192,  # Limite de sécurité pour économiser
+            "temperature": 0,           # 0 est idéal pour l'OCR (plus précis/déterministe)
+        }
+
         # Retry logic for 429 Resource Exhausted
         import time
         from google.api_core.exceptions import ResourceExhausted
@@ -93,7 +98,10 @@ def scan_image():
         response = None
         for attempt in range(4): # Try 4 times (Initial + 3 retries)
             try:
-                response = model.generate_content([prompt, image_part])
+                response = model.generate_content(
+                    [prompt, image_part],
+                    generation_config=generation_config
+                )
                 break
             except ResourceExhausted:
                 if attempt == 3:
