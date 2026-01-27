@@ -5,8 +5,8 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 
 app = Flask(__name__)
-# Autoriser les requêtes venant de n'importe où (pour le dev)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Enable CORS with more explicit settings to avoid issues on Render/Vercel
+CORS(app)
 
 # --- CONFIGURATION VERTEX AI ---
 # --- CONFIGURATION VERTEX AI ---
