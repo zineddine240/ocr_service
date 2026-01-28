@@ -164,26 +164,18 @@ def scan_image():
         # 3. Gemini Call
         start_ai = time.time()
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION}) with MINIMAL thinking...")
+        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION})...")
         
+        # Simplified call to avoid overhead in limited memory environments
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
                 image_part, 
-                "Extract all text from image. No comments."
+                "Extract all text from image. No comments, no reasoning, just text."
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
-                max_output_tokens=2048,
-                thinking_config=types.ThinkingConfig(
-                    include_thoughts=True,
-                    thinking_level="MINIMAL"
-                ),
-                # Optimization: Use lower resolution for faster processing if detail is enough
-                # Note: 'media_resolution' might be 'image_resolution' or similar in some SDK versions,
-                # but based on the provided text, I will try to use the most likely parameter or system instruction.
-                # Since the SDK version might vary, I'll add a system instruction to complement it.
-                system_instruction="Analyze and extract text immediately using minimal reasoning."
+                max_output_tokens=2048
             )
         )
         ai_duration = time.time() - start_ai
