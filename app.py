@@ -142,61 +142,43 @@ def scan_image():
         return jsonify({"success": False, "error": "No image provided"}), 400
 
     try:
-        # 1. Image Receipt
-        start_receive = time.time()
         file = request.files['image']
         img_bytes = file.read()
-        file_size = len(img_bytes) / (1024 * 1024)
         mime = file.content_type or "image/jpeg"
-        print(f"📥 [STEP 1] Received {file.filename} ({file_size:.2f} MB) - Time: {time.time() - start_receive:.2f}s")
         
-        start_process = time.time()
-        # 2. Optimization: Resize if image is large
-        if file_size > 0.8:
-            print(f"⚙️ [STEP 2] Fast-tracking image optimization...")
-            img = Image.open(io.BytesIO(img_bytes))
-            # 768px is extremely fast for OCR while staying accurate
-            img.thumbnail((768, 768))
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=75)
-            img_bytes = img_byte_arr.getvalue()
-            print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB")
-
-        # 3. Gemini Call
-        start_ai = time.time()
+        print(f"🚀 [START] OCR Request: {file.filename}")
+        start_time = time.time()
+        
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        print(f"⏳ [STEP 3] Calling Gemini 3 Flash (MINIMAL Thinking + LOW Res)...")
         
+        # Simple and direct call, as it was at the beginning (when it worked)
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
                 image_part, 
-                "OCR"
+                "Extract all text from this image accurately. No comments."
             ],
             config=types.GenerateContentConfig(
-                temperature=0.0,
-                max_output_tokens=1024,
-                # New optimization based on doc: reducing tokens per image
-                media_resolution="LOW",
-                thinking_config=types.ThinkingConfig(
-                    include_thoughts=True,
-                    thinking_level="MINIMAL"
-                )
+                temperature=0.0
             )
         )
-        ai_duration = time.time() - start_ai
-        print(f"✅ [DONE] Response in {ai_duration:.2f}s")
         
-        total_duration = time.time() - start_receive
+        duration = time.time() - start_time
+        print(f"✅ [DONE] Response in {duration:.2f}s")
+        
         return jsonify({
             "success": True, 
             "text": response.text.strip(),
-            "debug": {
-                "total_time": f"{total_duration:.2f}s",
-                "ai_time": f"{ai_duration:.2f}s",
-                "optimized": file_size > 1.5
-            }
+            "time": f"{duration:.2f}s"
         })
+
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({
+            "success": False, 
+            "error": "OCR failed",
+            "details": str(e)
+        }), 500
 
     except Exception as e:
         print(f"❌ Gemini 3 Error: {str(e)}")
