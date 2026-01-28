@@ -56,13 +56,15 @@ def get_client():
             "universe_domain": "googleapis.com"
         }
         
-        # 3. Injection dans un fichier temporaire (Obligatoire pour le SDK google-genai)
-        temp_creds = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
-        json.dump(credentials_info, temp_creds)
-        temp_creds.close()
+        # 3. Use a persistent temporary file for credentials to avoid disk bloat
+        creds_path = os.path.join(tempfile.gettempdir(), "google_creds_ocr.json")
+        if not os.path.exists(creds_path):
+            with open(creds_path, 'w') as f:
+                json.dump(credentials_info, f)
+            print(f"✅ Credentials file created at: {creds_path}")
         
-        # 4. Définition de la variable d'environnement ADC
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_creds.name
+        # 4. Set ADC environment variable
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
         
         print(f"✅ Fichier credentials généré: {temp_creds.name}")
         
@@ -149,33 +151,31 @@ def scan_image():
         print(f"📥 [STEP 1] Received {file.filename} ({file_size:.2f} MB) - Time: {time.time() - start_receive:.2f}s")
         
         start_process = time.time()
-        # 2. Optimization: Resize if image is too large (> 1.5MB)
-        if file_size > 1.5:
-            print(f"⚙️ [STEP 2] Optimizing large image...")
+        # 2. Optimization: Resize if image is large
+        if file_size > 1.0:
+            print(f"⚙️ [STEP 2] Optimizing image ({file_size:.2f} MB)...")
             img = Image.open(io.BytesIO(img_bytes))
-            # Even smaller for memory safety on Render Free
-            img.thumbnail((800, 800))
+            # 1024px is the sweet spot for OCR vs Speed
+            img.thumbnail((1024, 1024))
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=75)
+            img.save(img_byte_arr, format='JPEG', quality=80)
             img_bytes = img_byte_arr.getvalue()
-            print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB - Time: {time.time() - start_process:.2f}s")
-        else:
-            print(f"⏩ [STEP 2] Skipping optimization (small image)")
+            print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB")
 
         # 3. Gemini Call
         start_ai = time.time()
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION})...")
+        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION}) [LOW Thinking]...")
         
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
                 image_part, 
-                "Extract all text from image. No comments, no reasoning, just text."
+                "Extract all text exactly as shown."
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
-                max_output_tokens=1024,
+                max_output_tokens=2048,
                 thinking_config=types.ThinkingConfig(
                     include_thoughts=True,
                     thinking_level="LOW"
@@ -183,7 +183,7 @@ def scan_image():
             )
         )
         ai_duration = time.time() - start_ai
-        print(f"✅ [DONE] AI Response received in {ai_duration:.2f}s")
+        print(f"✅ [DONE] AI Response in {ai_duration:.2f}s")
         
         total_duration = time.time() - start_receive
         return jsonify({
