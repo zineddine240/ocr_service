@@ -18,8 +18,8 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-# us-central1 est souvent plus performant pour les modèles Preview sur Vertex AI
-LOCATION = "us-central1" 
+# 'global' is recommended for Gemini 3 Preview models on Vertex AI
+LOCATION = "global" 
 
 def get_client():
     try:
