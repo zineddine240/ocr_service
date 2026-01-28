@@ -17,21 +17,16 @@ from google.oauth2 import service_account
 load_dotenv()
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "us-central1"
+# La documentation indique "global" pour Gemini 3 Flash Preview
+LOCATION_GLOBAL = "global"
+LOCATION_DEFAULT = "us-central1"
 
-model = None
-# On utilise le nom alias standard pour Gemini 3 Flash
-model_name = "gemini-3-flash-preview" 
+model_3 = None
+model_15 = None
 
 def init_vertex():
-    global model, model_name
+    global model_3, model_15
     try:
-        # Vérification des variables d'environnement
-        required_vars = ["GOOGLE_PROJECT_ID", "GOOGLE_PRIVATE_KEY", "GOOGLE_CLIENT_EMAIL", "GOOGLE_PRIVATE_KEY_ID", "GOOGLE_CLIENT_ID"]
-        missing = [v for v in required_vars if not os.getenv(v)]
-        if missing:
-            return False, f"Variables manquantes : {', '.join(missing)}"
-
         pk = os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n').strip()
         if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
 
@@ -50,21 +45,20 @@ def init_vertex():
         }
         
         creds = service_account.Credentials.from_service_account_info(credentials_info)
-        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
         
-        # Test du modèle spécifié
-        try:
-            # On vérifie si gemini-3-flash-preview est prêt, sinon on tente un alias alternatif ou on replie
-            print(f"Tentative de chargement de {model_name}...")
-            model = GenerativeModel(model_name)
-            return True, "OK"
-        except Exception as e:
-            print(f"Erreur modèle {model_name}, tentative de repli...")
-            model_name = "gemini-1.5-flash"
-            model = GenerativeModel(model_name)
-            return True, f"Modèle {model_name} utilisé par défaut."
+        # Initialisation pour Gemini 3 (Location global d'après la doc)
+        print(f"Initialisation Vertex AI pour Gemini 3 (location: {LOCATION_GLOBAL})...")
+        vertexai.init(project=PROJECT_ID, location=LOCATION_GLOBAL, credentials=creds)
+        model_3 = GenerativeModel("gemini-3-flash-preview")
+        
+        # Initialisation secondaire pour Gemini 1.5 (Location us-central1 pour stabilité)
+        # Note: vertexai.init est global au process, mais on peut changer la location si besoin
+        # Mais essayons de voir si 1.5 fonctionne aussi en global ou si on gère la bascule au moment du scan.
+        
+        return True, "Initialisé avec succès"
 
     except Exception as e:
+        print(f"Erreur d'initialisation: {str(e)}")
         return False, str(e)
 
 # Initialisation au démarrage
@@ -79,58 +73,65 @@ def add_cors(response):
 def health():
     return jsonify({
         "status": "online", 
-        "model": model_name, 
         "init_success": success, 
         "init_message": message
     })
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
-    global model, success, message
+    global model_3, success
     
-    # Tentative d'instanciation au moment de l'appel pour attraper l'erreur 404 de Google
+    if 'image' not in request.files:
+        return jsonify({"success": False, "error": "Aucune image reçue"}), 400
+
+    file = request.files['image']
+    img_bytes = file.read()
+    mime = file.content_type or "image/jpeg"
+    if img_bytes.startswith(b'\x89PNG'): mime = 'image/png'
+    
+    prompt = "1. Extract all text from this image, without any comments or explanations."
+    image_part = Part.from_data(data=img_bytes, mime_type=mime)
+
+    # 1. Tentative avec Gemini 3 (Location Global)
     try:
-        if not model:
-            init_vertex()
-        
-        if 'image' not in request.files:
-            return jsonify({"success": False, "error": "Aucune image reçue"}), 400
-
-        file = request.files['image']
-        img_bytes = file.read()
-        mime = file.content_type or "image/jpeg"
-        if img_bytes.startswith(b'\x89PNG'): mime = 'image/png'
-        
-        image_part = Part.from_data(data=img_bytes, mime_type=mime)
-        prompt = "1. Extract all text from this image, without any comments or explanations."
-
-        # Appel au modèle
-        print(f"📡 Appel Vertex AI avec {model_name}...")
-        response = model.generate_content(
-            [image_part, prompt],
-            generation_config={"temperature": 0, "max_output_tokens": 8192}
-        )
-
-        return jsonify({"success": True, "text": response.text})
-
+        if model_3:
+            print("� Tentative avec Gemini 3 Flash Preview (Global)...")
+            response = model_3.generate_content(
+                [image_part, prompt],
+                generation_config={"temperature": 0, "max_output_tokens": 8192}
+            )
+            return jsonify({"success": True, "text": response.text, "model": "gemini-3-flash-preview"})
     except Exception as e:
-        error_str = str(e)
-        # Si c'est une erreur 404 (modèle non trouvé), on bascule immédiatement sur 1.5
-        if "404" in error_str or "not found" in error_str.lower():
-            print("⚠️ Modèle non trouvé par Google, bascule forcée sur 1.5-flash")
-            try:
-                fallback_model = GenerativeModel("gemini-1.5-flash")
-                # Ré-essai immédiat du scan avec 1.5
-                file.seek(0)
-                img_bytes = file.read()
-                image_part = Part.from_data(data=img_bytes, mime_type=mime)
-                response = fallback_model.generate_content([image_part, prompt])
-                return jsonify({"success": True, "text": response.text, "info": "Bascule auto sur 1.5 car 3 est indisponible"})
-            except Exception as e2:
-                return jsonify({"success": False, "error": f"Erreur critique suite à bascule: {str(e2)}"}), 500
+        print(f"⚠️ Échec Gemini 3: {str(e)}")
         
-        return jsonify({"success": False, "error": f"Erreur OCR: {error_str}"}), 500
+    # 2. Bascule sur Gemini 1.5 Flash (Location us-central1)
+    try:
+        print("🔄 Bascule sur Gemini 1.5 Flash (Location standard)...")
+        # On ré-init sur us-central1 pour le fallback
+        pk = os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n').strip()
+        if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
+        
+        creds = service_account.Credentials.from_service_account_info({
+            "type": "service_account",
+            "project_id": PROJECT_ID,
+            "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
+            "private_key": pk,
+            "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
+            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        })
+        
+        vertexai.init(project=PROJECT_ID, location=LOCATION_DEFAULT, credentials=creds)
+        model_15 = GenerativeModel("gemini-1.5-flash")
+        
+        # On doit re-créer les objets Part car l'init a changé la région
+        image_part = Part.from_data(data=img_bytes, mime_type=mime)
+        response = model_15.generate_content([image_part, prompt])
+        
+        return jsonify({"success": True, "text": response.text, "model": "gemini-1.5-flash", "info": "Gemini 3 indisponible"})
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Erreur critique: {str(e)}", "trace": traceback.format_exc()}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
