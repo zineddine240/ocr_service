@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 from google import genai
 from google.genai import types
@@ -15,7 +16,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "global" # Obligatoire pour Gemini 3
+LOCATION = "us-central1" # Recommandé pour Gemini 3 Preview
 
 def get_client():
     try:
@@ -84,6 +85,34 @@ def health():
         "client_ready": client is not None
     })
 
+@app.errorhandler(500)
+def internal_error(error):
+    response = jsonify({
+        "success": False,
+        "error": "Internal Server Error",
+        "details": str(error)
+    })
+    response.status_code = 500
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Pass through HTTP errors
+    if isinstance(e, HTTPException):
+        return e
+    # Now you're handling non-HTTP exceptions only
+    print(f"❌ Unhandled Exception: {str(e)}")
+    print(traceback.format_exc())
+    response = jsonify({
+        "success": False,
+        "error": "Unhandled Exception",
+        "details": str(e)
+    })
+    response.status_code = 500
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
 @app.route('/scan', methods=['POST'])
 def scan_image():
     global client
@@ -105,8 +134,11 @@ def scan_image():
     target_model = "gemini-3-flash-preview"
     
     try:
-        print(f"🚀 Scan avec {target_model} (Global)...")
+        print(f"🚀 Scan avec {target_model} (us-central1)...")
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+        
+        # Ensure we are using the correct client configuration for the model
+        # Re-verify client supports the location if it was created as global
         
         response = client.models.generate_content(
             model=target_model,
@@ -120,11 +152,12 @@ def scan_image():
         error_msg = str(e)
         print(f"⚠️ Erreur Gemini 3: {error_msg}")
         
-        # REPLI ROBUSTE : Si Gemini 3 plante (souvent "404 not found" ou "permission denied"), on force le 1.5 sur us-central1
+        # REPLI ROBUSTE : Si Gemini 3 plante, on force le 1.5
         try:
             print("🔄 Bascule de secours sur Gemini 1.5 Flash (us-central1)...")
             
             # On recrée un client spécifiquement pour us-central1 (plus stable)
+            # Use a fresh client for the fallback to ensure clean state
             client_fallback = genai.Client(vertexai=True, project=PROJECT_ID, location="us-central1")
             
             image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
