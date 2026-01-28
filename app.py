@@ -7,7 +7,7 @@ import traceback
 
 app = Flask(__name__)
 
-# CONFIGURATION CORS ULTRA-SIMPLE POUR LA PROD
+# CORS avec support explicite pour les erreurs
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 #--- CONFIGURATION VERTEX AI ---
@@ -19,23 +19,20 @@ load_dotenv()
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
 LOCATION = "us-central1"
 
-print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
-
 model = None
-# On utilise gemini-3-flash-preview comme demandé
 model_name = "gemini-3-flash-preview" 
 
 def init_vertex():
     global model, model_name
     try:
-        pk = os.getenv("GOOGLE_PRIVATE_KEY")
-        if not pk:
-            print("❌ ERREUR: GOOGLE_PRIVATE_KEY manquante")
-            return
-            
-        pk = pk.replace('\\n', '\n').strip()
-        if pk.startswith('"') and pk.endswith('"'):
-            pk = pk[1:-1]
+        # Vérification des variables d'environnement
+        required_vars = ["GOOGLE_PROJECT_ID", "GOOGLE_PRIVATE_KEY", "GOOGLE_CLIENT_EMAIL", "GOOGLE_PRIVATE_KEY_ID", "GOOGLE_CLIENT_ID"]
+        missing = [v for v in required_vars if not os.getenv(v)]
+        if missing:
+            return False, f"Variables manquantes : {', '.join(missing)}"
+
+        pk = os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n').strip()
+        if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
 
         credentials_info = {
             "type": "service_account",
@@ -54,48 +51,53 @@ def init_vertex():
         creds = service_account.Credentials.from_service_account_info(credentials_info)
         vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
         
-        # Initialisation du modèle demandé
+        # Test du modèle 3
         try:
-            print(f"⏳ Chargement du modèle {model_name}...")
             model = GenerativeModel(model_name)
-            print(f"✅ Modèle {model_name} initialisé.")
+            # On ne fait pas d'appel ici pour éviter les délais
+            return True, "OK"
         except Exception as e:
-            print(f"⚠️ Erreur chargement {model_name}: {str(e)}")
-            # Fallback sur 1.5 flash si 2.5 n'est pas dispo
+            # Repli auto si Gemini 3 est indisponible
             model_name = "gemini-1.5-flash"
             model = GenerativeModel(model_name)
-            print(f"✅ Repli sur {model_name} réussi.")
+            return True, f"Modèle 3 indisponible, repli sur 1.5. Erreur: {str(e)}"
 
     except Exception as e:
-        print(f"❌ ERREUR INIT VERTEX: {str(e)}")
+        return False, str(e)
 
-init_vertex()
+# Initialisation au démarrage
+success, message = init_vertex()
+print(f"--- Init Status: {success}, {message} ---")
 
 @app.after_request
 def add_cors(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
 @app.route('/', methods=['GET'])
 def health():
-    return jsonify({"status": "ready", "model": model_name})
+    return jsonify({
+        "status": "online", 
+        "model": model_name, 
+        "init_success": success, 
+        "init_message": message
+    })
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
-    if model is None:
-        init_vertex()
-        if model is None:
-            return jsonify({"success": False, "error": "Vertex AI not initialized"}), 500
+    global model, success, message
+    
+    if not success:
+        success, message = init_vertex() # Ré-essai
+        if not success:
+            return jsonify({"success": False, "error": f"Initialisation échouée: {message}"}), 500
 
     if 'image' not in request.files:
-        return jsonify({"success": False, "error": "No image"}), 400
+        return jsonify({"success": False, "error": "Aucune image reçue"}), 400
 
     try:
         file = request.files['image']
         img_bytes = file.read()
-        
         mime = file.content_type or "image/jpeg"
         if img_bytes.startswith(b'\x89PNG'): mime = 'image/png'
         
@@ -107,11 +109,23 @@ def scan_image():
             generation_config={"temperature": 0, "max_output_tokens": 8192}
         )
 
-        return jsonify({"success": True, "text": response.text})
+        if not response.candidates:
+             return jsonify({"success": False, "error": "Google AI n'a retourné aucun résultat (bloqué par filtres ?)"}), 500
+
+        # Accès sécurisé au texte
+        try:
+            extracted_text = response.text
+        except Exception:
+            extracted_text = response.candidates[0].content.parts[0].text if response.candidates else "Erreur lecture texte"
+
+        return jsonify({"success": True, "text": extracted_text})
 
     except Exception as e:
-        print(f"❌ ERROR SCAN: {str(e)}")
-        return jsonify({"success": False, "error": str(e), "trace": traceback.format_exc()}), 500
+        return jsonify({
+            "success": False, 
+            "error": f"Erreur OCR: {str(e)}", 
+            "trace": traceback.format_exc()
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
