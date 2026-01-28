@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import vertexai
 from vertexai.generative_models import GenerativeModel, Part
@@ -7,8 +7,9 @@ import traceback
 
 app = Flask(__name__)
 
-# Configuration CORS ultra-permissive pour diagnostiquer l'erreur 500
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+# Configuration CORS ROBUSTE pour Render
+# On autorise tout le monde sans credentials pour éviter les conflits de headers
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- CONFIGURATION VERTEX AI ---
 from dotenv import load_dotenv
@@ -45,7 +46,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # On utilise gemini-2.5-pro comme demandé
+    # UTILISATION DE GEMINI 2.5 PRO COMME DEMANDÉ
     model_name = "gemini-2.5-pro" 
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
@@ -55,22 +56,21 @@ except Exception as e:
     print("❌ ERREUR INITIALISATION VERTEX :")
     print(e)
 
-# Handler global pour les erreurs pour forcer les headers CORS même en cas de crash
 @app.errorhandler(Exception)
 def handle_exception(e):
-    print(f"!!! CRASH SERVEUR !!! : {str(e)}")
-    print(traceback.format_exc())
+    print(f"!!! CRASH !!! : {str(e)}")
     response = jsonify({
         "success": False, 
         "error": str(e),
-        "trace": traceback.format_exc() if app.debug else None
+        "trace": traceback.format_exc()
     })
+    # S'assurer que le header CORS est présent même en cas d'erreur
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response, 500
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({"status": "online", "model": "gemini-2.5-pro"})
+    return jsonify({"status": "online", "model": "gemini-2.5-pro", "cors": "enabled"})
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
@@ -79,23 +79,24 @@ def scan_image():
         return jsonify({"success": False, "error": "No image found"}), 400
 
     if model is None:
-        return jsonify({"success": False, "error": "AI model not loaded (Vertex Init Failed)"}), 500
+         return jsonify({"success": False, "error": "Model not loaded (Vertex AI initialization failed)"}), 500
 
     file = request.files['image']
     
     try:
         img_bytes = file.read()
+        print(f"🚀 Scan: {file.filename} ({len(img_bytes)} bytes)")
         
-        # Détection du MIME type réel
         mime_type = file.content_type
         if img_bytes.startswith(b'\x89PNG'): mime_type = 'image/png'
         elif img_bytes.startswith(b'\xff\xd8'): mime_type = 'image/jpeg'
 
         image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
+        # Prompt simple demandé par l'utilisateur
         prompt = "1. Extract all text from this image, without any comments or explanations."
 
-        print(f"🚀 OCR avec {model_name}...")
+        print("📡 Appel Vertex AI (Gemini 2.5 Pro)...")
         
         generation_config = {
             "max_output_tokens": 8192,
@@ -119,14 +120,14 @@ def scan_image():
         )
 
         if not response.text:
-            return jsonify({"success": False, "error": "Empty response from AI"}), 500
+            return jsonify({"success": False, "error": "AI returned empty text"}), 500
 
-        print("✅ Texte extrait.")
+        print("✅ OCR Terminé")
         return jsonify({"success": True, "text": response.text.strip()})
 
     except Exception as e:
-        print(f"❌ ERREUR PENDANT LE SCAN : {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        print(f"❌ ERREUR SCAN : {str(e)}")
+        return jsonify({"success": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
