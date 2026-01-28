@@ -42,8 +42,8 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # Restons sur 2.5 Flash mais avec des réglages plus agressifs
-    model_name = "gemini-2.5-flash" 
+    # PASSAGE À GEMINI 2.5 PRO pour une précision maximale
+    model_name = "gemini-2.5-pro" 
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
     print("✅ Modèle Vertex AI chargé avec succès.")
@@ -54,7 +54,7 @@ except Exception as e:
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({"status": "online", "model": "gemini-2.5-flash"})
+    return jsonify({"status": "online", "model": "gemini-2.5-pro"})
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
@@ -66,7 +66,6 @@ def scan_image():
         return jsonify({"success": False, "error": "AI model not loaded"}), 500
 
     file = request.files['image']
-    lang = request.form.get('language', 'French')
     
     try:
         img_bytes = file.read()
@@ -78,10 +77,10 @@ def scan_image():
 
         image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
-        # SIMPLE HIGH-ACCURACY PROMPT
+        # SIMPLE HIGH-ACCURACY PROMPT (Confirmé par l'utilisateur)
         prompt = "1. Extract all text from this image with 100% accuracy."
 
-        print(f"🚀 OCR Exhaustif (Langue: {lang})...")
+        print(f"🚀 OCR avec Gemini 2.5 Pro...")
         
         generation_config = {
             "max_output_tokens": 8192,
@@ -90,7 +89,6 @@ def scan_image():
             "top_k": 1
         }
 
-        # Désactivation des filtres
         from vertexai.generative_models import HarmCategory, HarmBlockThreshold
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -99,7 +97,7 @@ def scan_image():
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        # Important: Envoyer l'image AVANT le prompt pour les modèles Multimodaux
+        # Image en premier pour une meilleure focalisation visuelle
         response = model.generate_content(
             [image_part, prompt],
             generation_config=generation_config,
