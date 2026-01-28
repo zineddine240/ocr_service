@@ -135,15 +135,16 @@ def scan_image():
     try:
         file = request.files['image']
         img_bytes = file.read()
+        file_size = len(img_bytes) / (1024 * 1024) # Taille en Mo
         mime = file.content_type or "image/jpeg"
         
-        print(f"🚀 [START] OCR Request for {file.filename}")
+        print(f"🚀 [START] OCR Request: {file.filename} ({file_size:.2f} MB)")
         import time
         start_time = time.time()
         
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
         
-        print(f"⏳ Calling Gemini 3 Flash Preview in {LOCATION}...")
+        print(f"⏳ Calling Gemini 3 Flash Preview in {LOCATION} (Project: {PROJECT_ID})...")
         
         # Strictly use gemini-3-flash-preview
         response = client.models.generate_content(
