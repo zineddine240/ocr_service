@@ -1,53 +1,43 @@
 import os
-import json
-import tempfile
-from flask import Flask, request, jsonify
-from werkzeug.exceptions import HTTPException
-from flask_cors import CORS
-from google import genai
-from google.genai import types
-import traceback
 import time
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import vertexai
+from vertexai.generative_models import GenerativeModel, Part
+from google.oauth2 import service_account
 from dotenv import load_dotenv
-from PIL import Image
-import io
+from google.api_core.exceptions import ResourceExhausted
 
 load_dotenv()
 
 app = Flask(__name__)
-# CORS : Très permissif pour éviter les blocages
+# Autoriser les requêtes venant de n'importe où (pour le dev)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# --- CONFIGURATION VERTEX AI ---
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-# 'global' is the most stable and compatible region for Gemini 3 Preview
-LOCATION = "global" 
+LOCATION = "us-central1"
 
-def get_client():
+print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
+
+model = None
+
+def init_vertex():
+    global model
     try:
-        print(f"🔧 Starting Vertex AI Config for Project: {PROJECT_ID}")
-        
-        # 1. Nettoyage de la clé privée (Source fréquente d'erreurs)
-        raw_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
-        if not raw_key:
-            print("❌ ERREUR: GOOGLE_PRIVATE_KEY est vide sur le serveur !")
-            return None
-            
-        pk = raw_key.replace('\\n', '\n').strip()
-        if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
-        
-        # Debug (Sécurisé : on n'affiche que le début)
-        print(f"🔑 Clé chargée (début): {pk[:15]}...")
-        
-        client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
-        print(f"📧 Service Account Email: {client_email}")
+        # Reconstitution des identifiants depuis les variables d'environnement
+        private_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
+        if private_key:
+            private_key = private_key.replace('\\n', '\n').strip()
+            if private_key.startswith('"') and private_key.endswith('"'):
+                private_key = private_key[1:-1]
 
-        # 2. Création du dictionnaire de credentials
         credentials_info = {
             "type": "service_account",
             "project_id": PROJECT_ID,
             "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
-            "private_key": pk,
-            "client_email": client_email,
+            "private_key": private_key,
+            "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
             "client_id": os.getenv("GOOGLE_CLIENT_ID"),
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
@@ -56,139 +46,83 @@ def get_client():
             "universe_domain": "googleapis.com"
         }
         
-        # 3. Use a persistent temporary file for credentials to avoid disk bloat
-        creds_path = os.path.join(tempfile.gettempdir(), "google_creds_ocr.json")
-        if not os.path.exists(creds_path):
-            with open(creds_path, 'w') as f:
-                json.dump(credentials_info, f)
-            print(f"✅ Credentials file created at: {creds_path}")
+        creds = service_account.Credentials.from_service_account_info(credentials_info)
+        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
         
-        # 4. Set ADC environment variable
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+        # MODIFICATION : Utilisation de Gemini 2.5 Flash
+        model_name = "gemini-2.5-flash" 
         
-        print(f"✅ Fichier credentials généré: {temp_creds.name}")
-        
-        # 5. Création du client
-        client = genai.Client(
-            vertexai=True,
-            project=PROJECT_ID,
-            location=LOCATION
-        )
-        return client
-        return client
+        print(f"⏳ Chargement du modèle {model_name}...")
+        model = GenerativeModel(model_name)
+        print("✅ Modèle Vertex AI chargé avec succès.")
+        return True
     except Exception as e:
-        print(f"❌ Erreur Init Client Vertex: {str(e)}")
-        # On log l'erreur complète pour la voir dans Render
-        print(traceback.format_exc())
-        return None
+        print("❌ ERREUR INITIALISATION VERTEX :")
+        print(e)
+        return False
 
-client = get_client()
-
-@app.after_request
-def add_cors(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
+# Initialisation au démarrage
+init_vertex()
 
 @app.route('/ping', methods=['GET'])
 def ping():
     return "pong"
 
-@app.route('/', methods=['GET'])
-def health():
-    return jsonify({
-        "status": "online", 
-        "mode": "vertex-ai",
-        "client_ready": client is not None
-    })
-
-@app.errorhandler(500)
-def internal_error(error):
-    response = jsonify({
-        "success": False,
-        "error": "Internal Server Error",
-        "details": str(error)
-    })
-    response.status_code = 500
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    # Pass through HTTP errors
-    if isinstance(e, HTTPException):
-        return e
-    # Now you're handling non-HTTP exceptions only
-    print(f"❌ Unhandled Exception: {str(e)}")
-    print(traceback.format_exc())
-    response = jsonify({
-        "success": False,
-        "error": "Unhandled Exception",
-        "details": str(e)
-    })
-    response.status_code = 500
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
-
 @app.route('/scan', methods=['POST'])
 def scan_image():
-    global client
-    
-    if not client:
-        client = get_client()
-        if not client:
-            return jsonify({"success": False, "error": "Vertex AI Client not initialized"}), 500
+    global model
+    if model is None:
+        if not init_vertex():
+            return jsonify({"success": False, "error": "Le modèle AI n'est pas chargé (Erreur serveur)"}), 500
 
     if 'image' not in request.files:
-        return jsonify({"success": False, "error": "No image provided"}), 400
+        return jsonify({"success": False, "error": "Aucune image envoyée"}), 400
 
+    file = request.files['image']
+    
     try:
-        file = request.files['image']
+        # Lecture de l'image
         img_bytes = file.read()
-        mime = file.content_type or "image/jpeg"
         
-        print(f"🚀 [START] OCR Request: {file.filename}")
+        # Préparation pour Vertex AI
+        image_part = Part.from_data(
+            data=img_bytes, 
+            mime_type=file.content_type if file.content_type else "image/jpeg"
+        )
+
+        prompt = "Extract all text from this image exactly as it appears. No markdown, no comments."
+
+        print("🚀 Envoi à Vertex AI (Gemini 2.5 Flash)...")
         start_time = time.time()
         
-        image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        
-        # Simple and direct call, as it was at the beginning (when it worked)
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=[
-                image_part, 
-                "Extract all text from this image accurately. No comments."
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.0
-            )
-        )
-        
+        response = None
+        for attempt in range(4): # Try 4 times (Initial + 3 retries)
+            try:
+                response = model.generate_content([prompt, image_part])
+                break
+            except ResourceExhausted:
+                if attempt == 3:
+                    raise # Re-raise if last attempt
+                wait_time = 2 ** attempt
+                print(f"⚠️ Quota dépassé (429), nouvelle tentative dans {wait_time}s...")
+                time.sleep(wait_time)
+            except Exception as e:
+                raise e
+
+        final_text = response.text
         duration = time.time() - start_time
-        print(f"✅ [DONE] Response in {duration:.2f}s")
+        print(f"✅ Réponse reçue en {duration:.2f}s !")
         
         return jsonify({
             "success": True, 
-            "text": response.text.strip(),
+            "text": final_text.strip(),
             "time": f"{duration:.2f}s"
         })
 
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
-        return jsonify({
-            "success": False, 
-            "error": "OCR failed",
-            "details": str(e)
-        }), 500
-
-    except Exception as e:
-        print(f"❌ Gemini 3 Error: {str(e)}")
-        return jsonify({
-            "success": False, 
-            "error": "OCR processing failed with gemini-3-flash-preview",
-            "details": str(e)
-        }), 500
+        print(f"❌ ERREUR PENDANT LE SCAN : {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Use port 5000 as default locally to match Vite config
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
