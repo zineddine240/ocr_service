@@ -22,8 +22,8 @@ LOCATION = "us-central1"
 print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
 
 model = None
-# On utilise gemini-2.5-flash comme demandé
-model_name = "gemini-2.5-flash" 
+# On utilise gemini-3-flash-preview comme demandé
+model_name = "gemini-3-flash-preview" 
 
 def init_vertex():
     global model, model_name
