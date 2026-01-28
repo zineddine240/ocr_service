@@ -8,6 +8,8 @@ from google import genai
 from google.genai import types
 import traceback
 from dotenv import load_dotenv
+from PIL import Image
+import io
 
 load_dotenv()
 
@@ -135,23 +137,33 @@ def scan_image():
     try:
         file = request.files['image']
         img_bytes = file.read()
-        file_size = len(img_bytes) / (1024 * 1024) # Taille en Mo
+        file_size = len(img_bytes) / (1024 * 1024)
         mime = file.content_type or "image/jpeg"
         
         print(f"🚀 [START] OCR Request: {file.filename} ({file_size:.2f} MB)")
         import time
         start_time = time.time()
-        
+
+        # Optimization: Resize if image is too large (> 1.5MB)
+        if file_size > 1.5:
+            print(f"⚙️ Optimizing large image...")
+            img = Image.open(io.BytesIO(img_bytes))
+            # Max dimension 1600px is usually enough for OCR
+            img.thumbnail((1600, 1600))
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=85)
+            img_bytes = img_byte_arr.getvalue()
+            print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB")
+
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
         
-        print(f"⏳ Calling Gemini 3 Flash Preview in {LOCATION} (Project: {PROJECT_ID})...")
+        print(f"⏳ Calling Gemini 3 Flash Preview ({LOCATION})...")
         
-        # Strictly use gemini-3-flash-preview
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
                 image_part, 
-                "Strict OCR: Extract all text from this image accurately. Output only the extracted text without any metadata, comments, or conversation."
+                "Extract all text from image. No comments."
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
