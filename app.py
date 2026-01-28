@@ -7,6 +7,7 @@ from flask_cors import CORS
 from google import genai
 from google.genai import types
 import traceback
+import time
 from dotenv import load_dotenv
 from PIL import Image
 import io
@@ -85,6 +86,10 @@ client = get_client()
 def add_cors(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+
+@app.route('/ping', methods=['GET'])
+def ping():
+    return "pong"
 
 @app.route('/', methods=['GET'])
 def health():
