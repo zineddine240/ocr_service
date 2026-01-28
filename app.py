@@ -5,7 +5,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 
 app = Flask(__name__)
-# Configuration CORS ultra-permissive pour Render et Vercel
+# CORS ultra-permissive pour le développement et la production
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # --- CONFIGURATION VERTEX AI ---
@@ -22,7 +22,7 @@ print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
 model = None
 
 try:
-    # Reconstitution des identifiants depuis les variables d'environnement
+    # Récupération des credentials
     private_key = os.getenv("GOOGLE_PRIVATE_KEY")
     if private_key:
         private_key = private_key.replace('\\n', '\n')
@@ -48,10 +48,8 @@ try:
     model_name = "gemini-2.5-flash" 
     
     print(f"⏳ Chargement du modèle {model_name}...")
-    model = GenerativeModel(
-        model_name,
-        system_instruction=["Extract all text from image, whitout any comments or explanations"]
-    )
+    # Initialisation simple (comme dans la version qui marchait bien)
+    model = GenerativeModel(model_name)
     print("✅ Modèle Vertex AI chargé avec succès.")
 
 except Exception as e:
@@ -63,43 +61,41 @@ def home():
     return jsonify({
         "message": "OCR Service is running!", 
         "status": "online", 
-        "deployed_model": "gemini-2.5-flash",
-        "last_update": "14:26"
+        "model": "gemini-2.5-flash"
     })
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
     global model
     if 'image' not in request.files:
-        return jsonify({"success": False, "error": "Aucune image envoyée"}), 400
+        return jsonify({"success": False, "error": "Aucune image reçue"}), 400
 
     if model is None:
-        return jsonify({"success": False, "error": "Le modèle AI n'est pas chargé (Erreur serveur)"}), 500
+        return jsonify({"success": False, "error": "Modèle non chargé"}), 500
 
     file = request.files['image']
     
     try:
-        # Lecture de l'image
         img_bytes = file.read()
         
-        # Préparation pour Vertex AI
+        # Préparation de la partie image
         image_part = Part.from_data(
             data=img_bytes, 
             mime_type=file.content_type if file.content_type else "image/jpeg"
         )
 
-        # Prompt
-        prompt = "Extract all text from image correctly, without any additional informations"
+        # LE MEILLEUR PROMPT (Version initiale stable)
+        prompt = "Extract all text from this image exactly as it appears. No markdown, no comments."
 
-        print("🚀 Envoi à Vertex AI...")
+        print("🚀 Envoi à Vertex AI (Mode Haute Fidélité)...")
         
-        # Configuration de précision
+        # Paramètres pour la précision
         generation_config = {
             "max_output_tokens": 8192,
             "temperature": 0.0,
         }
 
-        # Configuration de sécurité pour éviter les blocages sur des documents légitimes
+        # Sécurité désactivée pour éviter les refus sur des documents
         from vertexai.generative_models import HarmCategory, HarmBlockThreshold
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -108,27 +104,12 @@ def scan_image():
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        # Retry logic for 429 Resource Exhausted
-        import time
-        from google.api_core.exceptions import ResourceExhausted
-
-        response = None
-        for attempt in range(4): # Try 4 times (Initial + 3 retries)
-            try:
-                response = model.generate_content(
-                    [prompt, image_part],
-                    generation_config=generation_config,
-                    safety_settings=safety_settings
-                )
-                break
-            except ResourceExhausted:
-                if attempt == 3:
-                    raise # Re-raise if last attempt
-                wait_time = 2 ** attempt # 1s, 2s, 4s
-                print(f"⚠️ Quota dépassé (429), nouvelle tentative dans {wait_time}s...")
-                time.sleep(wait_time)
-            except Exception as e:
-                raise e
+        # Appel au modèle
+        response = model.generate_content(
+            [prompt, image_part],
+            generation_config=generation_config,
+            safety_settings=safety_settings
+        )
 
         final_text = response.text
         print("✅ Réponse reçue !")
@@ -136,7 +117,7 @@ def scan_image():
         return jsonify({"success": True, "text": final_text})
 
     except Exception as e:
-        print(f"❌ ERREUR PENDANT LE SCAN : {e}")
+        print(f"❌ ERREUR OCR : {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
