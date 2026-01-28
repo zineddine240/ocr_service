@@ -42,7 +42,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # On reste sur 2.5 Flash comme demandé, mais on peaufine l'initialisation
+    # Restons sur 2.5 Flash mais avec des réglages plus agressifs
     model_name = "gemini-2.5-flash" 
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
@@ -78,17 +78,10 @@ def scan_image():
 
         image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
-        # PROMPT DE HAUTE PRÉCISION
-        prompt = f"""
-        TRANSCRIPTION TASK:
-        1. Extract all text from this image with 100% accuracy.
-        2. Language: {lang}.
-        3. Preserve exactly the layout, headings, and line breaks.
-        4. Output ONLY the extracted text. 
-        5. DO NOT provide any markdown, commentary, or introduction.
-        """
+        # SIMPLE HIGH-ACCURACY PROMPT
+        prompt = "1. Extract all text from this image with 100% accuracy."
 
-        print(f"🚀 OCR Haute Fidélité (Langue: {lang})...")
+        print(f"🚀 OCR Exhaustif (Langue: {lang})...")
         
         generation_config = {
             "max_output_tokens": 8192,
@@ -97,6 +90,7 @@ def scan_image():
             "top_k": 1
         }
 
+        # Désactivation des filtres
         from vertexai.generative_models import HarmCategory, HarmBlockThreshold
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -105,7 +99,7 @@ def scan_image():
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        # On envoie l'image en premier pour que l'IA se focalise dessus immédiatement
+        # Important: Envoyer l'image AVANT le prompt pour les modèles Multimodaux
         response = model.generate_content(
             [image_part, prompt],
             generation_config=generation_config,
