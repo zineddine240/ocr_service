@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 import tempfile
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -12,16 +11,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+# CORS : Très permissif pour éviter les blocages
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "global" # Obligatoire pour Gemini 3 Flash Preview sur Vertex
+LOCATION = "global" # Obligatoire pour Gemini 3
 
 def get_client():
     try:
-        pk = os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n').strip()
+        # 1. Nettoyage de la clé privée (Source fréquente d'erreurs)
+        raw_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
+        if not raw_key:
+            print("❌ ERREUR: GOOGLE_PRIVATE_KEY est vide sur le serveur !")
+            return None
+            
+        pk = raw_key.replace('\\n', '\n').strip()
         if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
         
+        # Debug (Sécurisé : on n'affiche que le début)
+        print(f"🔑 Clé chargée (début): {pk[:15]}...")
+
+        # 2. Création du dictionnaire de credentials
         credentials_info = {
             "type": "service_account",
             "project_id": PROJECT_ID,
@@ -36,15 +46,17 @@ def get_client():
             "universe_domain": "googleapis.com"
         }
         
-        # SOLUTION : Créer un fichier JSON temporaire pour les credentials (ADC)
-        # C'est la méthode la plus fiable pour le nouveau SDK sur Render
+        # 3. Injection dans un fichier temporaire (Obligatoire pour le SDK google-genai)
         temp_creds = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
         json.dump(credentials_info, temp_creds)
         temp_creds.close()
         
-        # On dit au SDK où trouver les credentials
+        # 4. Définition de la variable d'environnement ADC
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_creds.name
         
+        print(f"✅ Fichier credentials généré: {temp_creds.name}")
+        
+        # 5. Création du client
         client = genai.Client(
             vertexai=True,
             project=PROJECT_ID,
@@ -52,22 +64,35 @@ def get_client():
         )
         return client
     except Exception as e:
-        print(f"Erreur Initialisation Client: {str(e)}")
+        print(f"❌ Erreur Init Client Vertex: {str(e)}")
+        # On log l'erreur complète pour la voir dans Render
+        print(traceback.format_exc())
         return None
 
 client = get_client()
 
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
 @app.route('/', methods=['GET'])
 def health():
-    return jsonify({"status": "online", "model": "gemini-3-flash-preview", "ready": client is not None})
+    return jsonify({
+        "status": "online", 
+        "mode": "vertex-ai",
+        "client_ready": client is not None
+    })
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
     global client
+    
+    # Tentative de ré-init si perdu
     if not client:
         client = get_client()
         if not client:
-            return jsonify({"success": False, "error": "Vertex AI initialization failed"}), 500
+            return jsonify({"success": False, "error": "Server Credential Error. Check Render Logs."}), 500
 
     if 'image' not in request.files:
         return jsonify({"success": False, "error": "Aucune image reçue"}), 400
@@ -76,47 +101,48 @@ def scan_image():
     img_bytes = file.read()
     mime = file.content_type or "image/jpeg"
     
+    # Modèle à utiliser
+    target_model = "gemini-3-flash-preview"
+    
     try:
-        print("🚀 Scan via Gemini 3 Flash Preview (Vertex Global)")
+        print(f"🚀 Scan avec {target_model} (Global)...")
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
         
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=[
-                image_part, 
-                "1. Extract all text from this image, without any comments or explanations."
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0,
-                max_output_tokens=8192
-            )
+            model=target_model,
+            contents=[image_part, "1. Extract all text from this image, without any comments or explanations."],
+            config=types.GenerateContentConfig(temperature=0)
         )
         
         return jsonify({"success": True, "text": response.text})
 
     except Exception as e:
         error_msg = str(e)
-        print(f"⚠️ Erreur: {error_msg}")
+        print(f"⚠️ Erreur Gemini 3: {error_msg}")
         
-        # Repli auto sur 1.5 si erreur de région ou de modèle indisponible
+        # REPLI ROBUSTE : Si Gemini 3 plante (souvent "404 not found" ou "permission denied"), on force le 1.5 sur us-central1
         try:
-            print("🔄 Tentative de repli sur Gemini 1.5 Flash (us-central1)...")
-            client_fallback = genai.Client(
-                vertexai=True,
-                project=PROJECT_ID,
-                location="us-central1"
-            )
-            image_part_f = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-            response_f = client_fallback.models.generate_content(
+            print("🔄 Bascule de secours sur Gemini 1.5 Flash (us-central1)...")
+            
+            # On recrée un client spécifiquement pour us-central1 (plus stable)
+            client_fallback = genai.Client(vertexai=True, project=PROJECT_ID, location="us-central1")
+            
+            image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+            response = client_fallback.models.generate_content(
                 model="gemini-1.5-flash",
-                contents=[image_part_f, "1. Extract all text from this image, without any comments or explanations."]
+                contents=[image_part, "1. Extract all text from this image, without any comments or explanations."]
             )
-            return jsonify({"success": True, "text": response_f.text, "info": "Bascule auto sur 1.5 Flash"})
+            return jsonify({
+                "success": True, 
+                "text": response.text, 
+                "note": "Fallback to 1.5-flash successful"
+            })
+            
         except Exception as e2:
+            print(f"❌ Erreur critique Fallback: {str(e2)}")
             return jsonify({
                 "success": False, 
-                "error": f"Erreur critique: {str(e2)}", 
-                "original_error": error_msg,
+                "error": f"Erreur OCR: {error_msg}. Fallback échoué: {str(e2)}",
                 "trace": traceback.format_exc()
             }), 500
 
