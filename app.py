@@ -153,9 +153,10 @@ def scan_image():
         if file_size > 1.5:
             print(f"⚙️ [STEP 2] Optimizing large image...")
             img = Image.open(io.BytesIO(img_bytes))
-            img.thumbnail((1024, 1024))
+            # Even smaller for memory safety on Render Free
+            img.thumbnail((800, 800))
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=80)
+            img.save(img_byte_arr, format='JPEG', quality=75)
             img_bytes = img_byte_arr.getvalue()
             print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB - Time: {time.time() - start_process:.2f}s")
         else:
@@ -166,7 +167,6 @@ def scan_image():
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
         print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION})...")
         
-        # Simplified call to avoid overhead in limited memory environments
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
@@ -175,7 +175,11 @@ def scan_image():
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
-                max_output_tokens=2048
+                max_output_tokens=1024,
+                thinking_config=types.ThinkingConfig(
+                    include_thoughts=True,
+                    thinking_level="LOW"
+                )
             )
         )
         ai_duration = time.time() - start_ai
