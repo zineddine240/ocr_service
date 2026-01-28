@@ -19,8 +19,8 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-# us-central1 is often faster for services hosted in the US (like Render)
-LOCATION = "us-central1" 
+# 'global' is the most stable and compatible region for Gemini 3 Preview
+LOCATION = "global" 
 
 def get_client():
     try:
@@ -153,9 +153,9 @@ def scan_image():
         if file_size > 1.5:
             print(f"⚙️ [STEP 2] Optimizing large image...")
             img = Image.open(io.BytesIO(img_bytes))
-            img.thumbnail((1600, 1600))
+            img.thumbnail((1024, 1024))
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=85)
+            img.save(img_byte_arr, format='JPEG', quality=80)
             img_bytes = img_byte_arr.getvalue()
             print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB - Time: {time.time() - start_process:.2f}s")
         else:
