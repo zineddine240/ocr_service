@@ -123,68 +123,48 @@ def handle_exception(e):
 def scan_image():
     global client
     
-    # Tentative de ré-init si perdu
     if not client:
         client = get_client()
         if not client:
-            return jsonify({"success": False, "error": "Server Credential Error. Check Render Logs."}), 500
+            return jsonify({"success": False, "error": "Vertex AI Client not initialized"}), 500
 
     if 'image' not in request.files:
-        return jsonify({"success": False, "error": "Aucune image reçue"}), 400
+        return jsonify({"success": False, "error": "No image provided"}), 400
 
-    file = request.files['image']
-    img_bytes = file.read()
-    mime = file.content_type or "image/jpeg"
-    
-    # Modèle à utiliser
-    target_model = "gemini-3-flash-preview"
-    
     try:
-        print(f"🚀 Scan avec {target_model} ({LOCATION})...")
+        file = request.files['image']
+        img_bytes = file.read()
+        mime = file.content_type or "image/jpeg"
+        
+        print(f"🚀 OCR Request: {file.filename} using gemini-3-flash-preview")
+        
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
         
-        # Ensure we are using the correct client configuration for the model
-        # Re-verify client supports the location if it was created as global
-        
+        # Strictly use gemini-3-flash-preview
         response = client.models.generate_content(
-            model=target_model,
-            contents=[image_part, "1. Extract all text from this image, without any comments or explanations."],
-            config=types.GenerateContentConfig(temperature=0)
+            model="gemini-3-flash-preview",
+            contents=[
+                image_part, 
+                "Strict OCR: Extract all text from this image accurately. Output only the extracted text without any metadata, comments, or conversation."
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=2048
+            )
         )
         
-        return jsonify({"success": True, "text": response.text})
+        return jsonify({
+            "success": True, 
+            "text": response.text.strip()
+        })
 
     except Exception as e:
-        error_msg = str(e)
-        print(f"⚠️ Erreur Gemini 3: {error_msg}")
-        
-        # REPLI ROBUSTE : Si Gemini 3 plante, on force le 1.5
-        try:
-            print("🔄 Bascule de secours sur Gemini 1.5 Flash (fallback global)...")
-            
-            # On recrée un client spécifiquement pour us-central1 (plus stable)
-            # Use a fresh client for the fallback to ensure clean state
-            # On tente 'global' aussi pour le fallback si us-central1 échoue
-            client_fallback = genai.Client(vertexai=True, project=PROJECT_ID, location="global")
-            
-            image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-            response = client_fallback.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=[image_part, "1. Extract all text from this image, without any comments or explanations."]
-            )
-            return jsonify({
-                "success": True, 
-                "text": response.text, 
-                "note": "Fallback to 1.5-flash successful"
-            })
-            
-        except Exception as e2:
-            print(f"❌ Erreur critique Fallback: {str(e2)}")
-            return jsonify({
-                "success": False, 
-                "error": f"Erreur OCR: {error_msg}. Fallback échoué: {str(e2)}",
-                "trace": traceback.format_exc()
-            }), 500
+        print(f"❌ Gemini 3 Error: {str(e)}")
+        return jsonify({
+            "success": False, 
+            "error": "OCR processing failed with gemini-3-flash-preview",
+            "details": str(e)
+        }), 500
 
 if __name__ == '__main__':
     # Use port 5000 as default locally to match Vite config
