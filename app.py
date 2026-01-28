@@ -42,6 +42,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
+    # On reste sur 2.5 Flash comme demandé, mais on peaufine l'initialisation
     model_name = "gemini-2.5-flash" 
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
@@ -65,19 +66,29 @@ def scan_image():
         return jsonify({"success": False, "error": "AI model not loaded"}), 500
 
     file = request.files['image']
-    lang = request.form.get('language', 'French') # Récupère la langue du frontend
+    lang = request.form.get('language', 'French')
     
     try:
         img_bytes = file.read()
-        image_part = Part.from_data(
-            data=img_bytes, 
-            mime_type=file.content_type if file.content_type else "image/jpeg"
-        )
+        
+        # Détection du MIME type réel
+        mime_type = file.content_type
+        if img_bytes.startswith(b'\x89PNG'): mime_type = 'image/png'
+        elif img_bytes.startswith(b'\xff\xd8'): mime_type = 'image/jpeg'
 
-        # Prompt amélioré avec la langue
-        prompt = f"Perform OCR on this image. The text is mainly in {lang}. Extract all text exactly as it appears, preserving the layout and lines. Output ONLY the extracted text, no comments, no markdown."
+        image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
-        print(f"🚀 OCR en cours (Langue: {lang})...")
+        # PROMPT DE HAUTE PRÉCISION
+        prompt = f"""
+        TRANSCRIPTION TASK:
+        1. Extract all text from this image with 100% accuracy.
+        2. Language: {lang}.
+        3. Preserve exactly the layout, headings, and line breaks.
+        4. Output ONLY the extracted text. 
+        5. DO NOT provide any markdown, commentary, or introduction.
+        """
+
+        print(f"🚀 OCR Haute Fidélité (Langue: {lang})...")
         
         generation_config = {
             "max_output_tokens": 8192,
@@ -94,17 +105,17 @@ def scan_image():
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
+        # On envoie l'image en premier pour que l'IA se focalise dessus immédiatement
         response = model.generate_content(
-            [prompt, image_part],
+            [image_part, prompt],
             generation_config=generation_config,
             safety_settings=safety_settings
         )
 
         if not response.text:
-            return jsonify({"success": False, "error": "AI returned empty text"}), 500
+            return jsonify({"success": False, "error": "Empty response from AI"}), 500
 
-        print("✅ Texte extrait avec succès.")
-        return jsonify({"success": True, "text": response.text})
+        return jsonify({"success": True, "text": response.text.strip()})
 
     except Exception as e:
         print(f"❌ ERREUR OCR : {e}")
