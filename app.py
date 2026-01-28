@@ -77,8 +77,8 @@ def scan_image():
 
         image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
-        # SIMPLE HIGH-ACCURACY PROMPT (Confirmé par l'utilisateur)
-        prompt = "1. Extract all text from this image with 100% accuracy."
+        # SIMPLE HIGH-ACCURACY PROMPT
+        prompt = "1. Extract all text from this image with 100% accuracy, without any comments or explanations."
 
         print(f"🚀 OCR avec Gemini 2.5 Pro...")
         
