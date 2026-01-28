@@ -165,17 +165,19 @@ def scan_image():
         # 3. Gemini Call
         start_ai = time.time()
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        print(f"⏳ [STEP 3] Calling Gemini 3 Flash (MINIMAL Thinking)...")
+        print(f"⏳ [STEP 3] Calling Gemini 3 Flash (MINIMAL Thinking + LOW Res)...")
         
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
                 image_part, 
-                "OCR: Text only."
+                "OCR"
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
                 max_output_tokens=1024,
+                # New optimization based on doc: reducing tokens per image
+                media_resolution="LOW",
                 thinking_config=types.ThinkingConfig(
                     include_thoughts=True,
                     thinking_level="MINIMAL"
