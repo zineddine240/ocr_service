@@ -8,7 +8,6 @@ import traceback
 app = Flask(__name__)
 
 # CONFIGURATION CORS ULTRA-SIMPLE POUR LA PROD
-# Sans credentials pour éviter les blocages strictes des navigateurs
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 #--- CONFIGURATION VERTEX AI ---
@@ -23,8 +22,8 @@ LOCATION = "us-central1"
 print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
 
 model = None
-# On utilise gemini-1.5-pro par défaut si 2.5 n'est pas dispo dans la région de Render
-model_name = "gemini-1.5-pro" 
+# On utilise gemini-2.5-flash comme demandé
+model_name = "gemini-2.5-flash" 
 
 def init_vertex():
     global model, model_name
@@ -35,7 +34,6 @@ def init_vertex():
             return
             
         pk = pk.replace('\\n', '\n').strip()
-        # Nettoyage des guillemets doubles que Render ajoute parfois
         if pk.startswith('"') and pk.endswith('"'):
             pk = pk[1:-1]
 
@@ -56,22 +54,23 @@ def init_vertex():
         creds = service_account.Credentials.from_service_account_info(credentials_info)
         vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
         
-        # Tentative avec 2.5 Pro comme demandé
+        # Initialisation du modèle demandé
         try:
-            model_name = "gemini-2.5-pro"
+            print(f"⏳ Chargement du modèle {model_name}...")
             model = GenerativeModel(model_name)
             print(f"✅ Modèle {model_name} initialisé.")
-        except:
-            model_name = "gemini-1.5-pro"
+        except Exception as e:
+            print(f"⚠️ Erreur chargement {model_name}: {str(e)}")
+            # Fallback sur 1.5 flash si 2.5 n'est pas dispo
+            model_name = "gemini-1.5-flash"
             model = GenerativeModel(model_name)
-            print(f"✅ Modèle de repli {model_name} initialisé.")
+            print(f"✅ Repli sur {model_name} réussi.")
 
     except Exception as e:
         print(f"❌ ERREUR INIT VERTEX: {str(e)}")
 
 init_vertex()
 
-# FORCER LES HEADERS SUR TOUTES LES RÉPONSES (Même les erreurs)
 @app.after_request
 def add_cors(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -86,7 +85,7 @@ def health():
 @app.route('/scan', methods=['POST'])
 def scan_image():
     if model is None:
-        init_vertex() # Tentative de ré-initialisation
+        init_vertex()
         if model is None:
             return jsonify({"success": False, "error": "Vertex AI not initialized"}), 500
 
@@ -97,7 +96,6 @@ def scan_image():
         file = request.files['image']
         img_bytes = file.read()
         
-        # MIME Detection
         mime = file.content_type or "image/jpeg"
         if img_bytes.startswith(b'\x89PNG'): mime = 'image/png'
         
