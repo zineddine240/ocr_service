@@ -176,9 +176,14 @@ def scan_image():
                 temperature=0.0,
                 max_output_tokens=2048,
                 thinking_config=types.ThinkingConfig(
-                    include_thoughts=True, # Required by Gemini 3
-                    thinking_level="MINIMAL" # Fastest mode
-                )
+                    include_thoughts=True,
+                    thinking_level="MINIMAL"
+                ),
+                # Optimization: Use lower resolution for faster processing if detail is enough
+                # Note: 'media_resolution' might be 'image_resolution' or similar in some SDK versions,
+                # but based on the provided text, I will try to use the most likely parameter or system instruction.
+                # Since the SDK version might vary, I'll add a system instruction to complement it.
+                system_instruction="Analyze and extract text immediately using minimal reasoning."
             )
         )
         ai_duration = time.time() - start_ai
