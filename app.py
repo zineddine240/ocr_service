@@ -16,7 +16,8 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "global" # Reverted to global as it worked locally
+# us-central1 est souvent plus performant pour les modèles Preview sur Vertex AI
+LOCATION = "us-central1" 
 
 def get_client():
     try:
@@ -136,9 +137,13 @@ def scan_image():
         img_bytes = file.read()
         mime = file.content_type or "image/jpeg"
         
-        print(f"🚀 OCR Request: {file.filename} using gemini-3-flash-preview")
+        print(f"🚀 [START] OCR Request for {file.filename}")
+        import time
+        start_time = time.time()
         
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+        
+        print(f"⏳ Calling Gemini 3 Flash Preview in {LOCATION}...")
         
         # Strictly use gemini-3-flash-preview
         response = client.models.generate_content(
@@ -153,9 +158,13 @@ def scan_image():
             )
         )
         
+        duration = time.time() - start_time
+        print(f"✅ [DONE] OCR finished in {duration:.2f} seconds")
+        
         return jsonify({
             "success": True, 
-            "text": response.text.strip()
+            "text": response.text.strip(),
+            "processing_time": f"{duration:.2f}s"
         })
 
     except Exception as e:
