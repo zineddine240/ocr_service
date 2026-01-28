@@ -135,29 +135,31 @@ def scan_image():
         return jsonify({"success": False, "error": "No image provided"}), 400
 
     try:
+        # 1. Image Receipt
+        start_receive = time.time()
         file = request.files['image']
         img_bytes = file.read()
         file_size = len(img_bytes) / (1024 * 1024)
         mime = file.content_type or "image/jpeg"
+        print(f"📥 [STEP 1] Received {file.filename} ({file_size:.2f} MB) - Time: {time.time() - start_receive:.2f}s")
         
-        print(f"🚀 [START] OCR Request: {file.filename} ({file_size:.2f} MB)")
-        import time
-        start_time = time.time()
-
-        # Optimization: Resize if image is too large (> 1.5MB)
+        start_process = time.time()
+        # 2. Optimization: Resize if image is too large (> 1.5MB)
         if file_size > 1.5:
-            print(f"⚙️ Optimizing large image...")
+            print(f"⚙️ [STEP 2] Optimizing large image...")
             img = Image.open(io.BytesIO(img_bytes))
-            # Max dimension 1600px is usually enough for OCR
             img.thumbnail((1600, 1600))
             img_byte_arr = io.BytesIO()
             img.save(img_byte_arr, format='JPEG', quality=85)
             img_bytes = img_byte_arr.getvalue()
-            print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB")
+            print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB - Time: {time.time() - start_process:.2f}s")
+        else:
+            print(f"⏩ [STEP 2] Skipping optimization (small image)")
 
+        # 3. Gemini Call
+        start_ai = time.time()
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        
-        print(f"⏳ Calling Gemini 3 Flash Preview ({LOCATION})...")
+        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION})...")
         
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
@@ -170,14 +172,18 @@ def scan_image():
                 max_output_tokens=2048
             )
         )
+        ai_duration = time.time() - start_ai
+        print(f"✅ [DONE] AI Response received in {ai_duration:.2f}s")
         
-        duration = time.time() - start_time
-        print(f"✅ [DONE] OCR finished in {duration:.2f} seconds")
-        
+        total_duration = time.time() - start_receive
         return jsonify({
             "success": True, 
             "text": response.text.strip(),
-            "processing_time": f"{duration:.2f}s"
+            "debug": {
+                "total_time": f"{total_duration:.2f}s",
+                "ai_time": f"{ai_duration:.2f}s",
+                "optimized": file_size > 1.5
+            }
         })
 
     except Exception as e:
