@@ -5,7 +5,37 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+# Liste des origines autorisées (Prod + Dev)
+ALLOWED_ORIGINS = [
+    "https://webtranslation-zyv2.vercel.app",
+    "https://webtranslation-olive.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8080"
+]
+
+# Configuration CORS plus stricte et robuste
+CORS(app, resources={r"/*": {
+    "origins": ALLOWED_ORIGINS,
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+    "expose_headers": ["Access-Control-Allow-Origin"],
+    "supports_credentials": True
+}})
+
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
 # --- CONFIGURATION VERTEX AI ---
 from dotenv import load_dotenv
@@ -42,7 +72,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # PASSAGE À GEMINI 2.5 PRO pour une précision maximale
+    # UTILISATION DE GEMINI 2.5 PRO COMME DEMANDÉ
     model_name = "gemini-2.5-pro" 
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
@@ -77,7 +107,7 @@ def scan_image():
 
         image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
-        # SIMPLE HIGH-ACCURACY PROMPT
+        # SIMPLE HIGH-ACCURACY PROMPT (Comme demandé)
         prompt = "1. Extract all text from this image, without any comments or explanations."
 
         print(f"🚀 OCR avec Gemini 2.5 Pro...")
