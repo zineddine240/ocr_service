@@ -1,41 +1,14 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import vertexai
 from vertexai.generative_models import GenerativeModel, Part
+import traceback
 
 app = Flask(__name__)
 
-# Liste des origines autorisées (Prod + Dev)
-ALLOWED_ORIGINS = [
-    "https://webtranslation-zyv2.vercel.app",
-    "https://webtranslation-olive.vercel.app",
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://localhost:8080",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:8080"
-]
-
-# Configuration CORS plus stricte et robuste
-CORS(app, resources={r"/*": {
-    "origins": ALLOWED_ORIGINS,
-    "methods": ["GET", "POST", "OPTIONS"],
-    "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-    "expose_headers": ["Access-Control-Allow-Origin"],
-    "supports_credentials": True
-}})
-
-@app.after_request
-def add_cors_headers(response):
-    origin = request.headers.get('Origin')
-    if origin in ALLOWED_ORIGINS:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response
+# Configuration CORS ultra-permissive pour diagnostiquer l'erreur 500
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # --- CONFIGURATION VERTEX AI ---
 from dotenv import load_dotenv
@@ -72,7 +45,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(credentials_info)
     vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     
-    # UTILISATION DE GEMINI 2.5 PRO COMME DEMANDÉ
+    # On utilise gemini-2.5-pro comme demandé
     model_name = "gemini-2.5-pro" 
     print(f"⏳ Chargement du modèle {model_name}...")
     model = GenerativeModel(model_name)
@@ -81,6 +54,19 @@ try:
 except Exception as e:
     print("❌ ERREUR INITIALISATION VERTEX :")
     print(e)
+
+# Handler global pour les erreurs pour forcer les headers CORS même en cas de crash
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print(f"!!! CRASH SERVEUR !!! : {str(e)}")
+    print(traceback.format_exc())
+    response = jsonify({
+        "success": False, 
+        "error": str(e),
+        "trace": traceback.format_exc() if app.debug else None
+    })
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response, 500
 
 @app.route('/', methods=['GET'])
 def home():
@@ -93,7 +79,7 @@ def scan_image():
         return jsonify({"success": False, "error": "No image found"}), 400
 
     if model is None:
-        return jsonify({"success": False, "error": "AI model not loaded"}), 500
+        return jsonify({"success": False, "error": "AI model not loaded (Vertex Init Failed)"}), 500
 
     file = request.files['image']
     
@@ -107,10 +93,9 @@ def scan_image():
 
         image_part = Part.from_data(data=img_bytes, mime_type=mime_type if mime_type else "image/jpeg")
 
-        # SIMPLE HIGH-ACCURACY PROMPT (Comme demandé)
         prompt = "1. Extract all text from this image, without any comments or explanations."
 
-        print(f"🚀 OCR avec Gemini 2.5 Pro...")
+        print(f"🚀 OCR avec {model_name}...")
         
         generation_config = {
             "max_output_tokens": 8192,
@@ -127,7 +112,6 @@ def scan_image():
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        # Image en premier pour une meilleure focalisation visuelle
         response = model.generate_content(
             [image_part, prompt],
             generation_config=generation_config,
@@ -137,10 +121,11 @@ def scan_image():
         if not response.text:
             return jsonify({"success": False, "error": "Empty response from AI"}), 500
 
+        print("✅ Texte extrait.")
         return jsonify({"success": True, "text": response.text.strip()})
 
     except Exception as e:
-        print(f"❌ ERREUR OCR : {e}")
+        print(f"❌ ERREUR PENDANT LE SCAN : {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
