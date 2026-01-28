@@ -1,7 +1,6 @@
-Flask
-Flask-Cors
-google-cloud-aiplatform
+flask
+flask-cors
+google-cloud-aiplatform>=1.70.0
 python-dotenv
 google-auth
-vertexai
 gunicorn
