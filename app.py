@@ -9,7 +9,6 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # --- CONFIGURATION VERTEX AI ---
-# --- CONFIGURATION VERTEX AI ---
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 
@@ -49,7 +48,10 @@ try:
     model_name = "gemini-2.5-flash" 
     
     print(f"⏳ Chargement du modèle {model_name}...")
-    model = GenerativeModel(model_name)
+    model = GenerativeModel(
+        model_name,
+        system_instruction=["Extract all text from image, whitout any comments or explanations"]
+    )
     print("✅ Modèle Vertex AI chargé avec succès.")
 
 except Exception as e:
@@ -86,17 +88,24 @@ def scan_image():
             mime_type=file.content_type if file.content_type else "image/jpeg"
         )
 
-        # Prompt optimisé pour la fidélité
-        prompt = "OCR this image. Extract all text exactly as it appears, maintaining the original layout, line breaks, and formatting. Do not add any comments or explanations."
+        # Prompt
+        prompt = "Extract all text from image correctly, without any additional informations"
 
-        print("🚀 Envoi à Vertex AI (Mode Haute Fidélité)...")
+        print("🚀 Envoi à Vertex AI...")
         
         # Configuration de précision
         generation_config = {
             "max_output_tokens": 8192,
             "temperature": 0.0,
-            "top_p": 1.0,
-            "top_k": 1,
+        }
+
+        # Configuration de sécurité pour éviter les blocages sur des documents légitimes
+        from vertexai.generative_models import HarmCategory, HarmBlockThreshold
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
         # Retry logic for 429 Resource Exhausted
@@ -108,7 +117,8 @@ def scan_image():
             try:
                 response = model.generate_content(
                     [prompt, image_part],
-                    generation_config=generation_config
+                    generation_config=generation_config,
+                    safety_settings=safety_settings
                 )
                 break
             except ResourceExhausted:
@@ -118,7 +128,6 @@ def scan_image():
                 print(f"⚠️ Quota dépassé (429), nouvelle tentative dans {wait_time}s...")
                 time.sleep(wait_time)
             except Exception as e:
-                # If it's another error, don't retry blindly
                 raise e
 
         final_text = response.text
