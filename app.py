@@ -152,38 +152,38 @@ def scan_image():
         
         start_process = time.time()
         # 2. Optimization: Resize if image is large
-        if file_size > 1.0:
-            print(f"⚙️ [STEP 2] Optimizing image ({file_size:.2f} MB)...")
+        if file_size > 0.8:
+            print(f"⚙️ [STEP 2] Fast-tracking image optimization...")
             img = Image.open(io.BytesIO(img_bytes))
-            # 1024px is the sweet spot for OCR vs Speed
-            img.thumbnail((1024, 1024))
+            # 768px is extremely fast for OCR while staying accurate
+            img.thumbnail((768, 768))
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=80)
+            img.save(img_byte_arr, format='JPEG', quality=75)
             img_bytes = img_byte_arr.getvalue()
             print(f"✅ Optimized to {len(img_bytes)/(1024*1024):.2f} MB")
 
         # 3. Gemini Call
         start_ai = time.time()
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION}) [LOW Thinking]...")
+        print(f"⏳ [STEP 3] Calling Gemini 3 Flash (MINIMAL Thinking)...")
         
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=[
                 image_part, 
-                "Extract all text exactly as shown."
+                "OCR: Text only."
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
-                max_output_tokens=2048,
+                max_output_tokens=1024,
                 thinking_config=types.ThinkingConfig(
                     include_thoughts=True,
-                    thinking_level="LOW"
+                    thinking_level="MINIMAL"
                 )
             )
         )
         ai_duration = time.time() - start_ai
-        print(f"✅ [DONE] AI Response in {ai_duration:.2f}s")
+        print(f"✅ [DONE] Response in {ai_duration:.2f}s")
         
         total_duration = time.time() - start_receive
         return jsonify({
