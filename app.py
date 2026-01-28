@@ -164,7 +164,7 @@ def scan_image():
         # 3. Gemini Call
         start_ai = time.time()
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION})...")
+        print(f"⏳ [STEP 3] Calling Gemini 3 Flash Preview ({LOCATION}) with MINIMAL thinking...")
         
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
@@ -174,7 +174,11 @@ def scan_image():
             ],
             config=types.GenerateContentConfig(
                 temperature=0.0,
-                max_output_tokens=2048
+                max_output_tokens=2048,
+                thinking_config=types.ThinkingConfig(
+                    include_thoughts=True, # Required by Gemini 3
+                    thinking_level="MINIMAL" # Fastest mode
+                )
             )
         )
         ai_duration = time.time() - start_ai
