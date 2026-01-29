@@ -16,7 +16,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- CONFIGURATION VERTEX AI ---
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "us-central1"
+LOCATION = "us-central1" # 'global' n'est pas supporté pour ce modèle 
 
 print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
 
@@ -25,12 +25,44 @@ model = None
 def init_vertex():
     global model
     try:
-        # Reconstitution des identifiants depuis les variables d'environnement
+        # 1. Tentative d'initialisation via Application Default Credentials (ADC)
+        # Indispensable pour Google Cloud Run.
+        try:
+            from google import auth
+            credentials, project = auth.default()
+            print(f"trying to use ADC (Project: {project})...")
+            vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
+            model_name = "gemini-2.5-flash"
+            model = GenerativeModel(model_name)
+            print(f"✅ Modèle Vertex AI ({model_name}) chargé via ADC.")
+            return True, ""
+        except Exception as adc_err:
+            print(f"ℹ️ ADC non disponible (Attendu en local si non connecté via gcloud) : {adc_err}")
+            print("🔄 Passage à l'initialisation manuelle (Service Account Key)...")
+
+        # 2. Reconstitution manuelle depuis les variables d'environnement (Fallback pour local/Render)
         private_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
-        if private_key:
-            private_key = private_key.replace('\\n', '\n').strip()
-            if private_key.startswith('"') and private_key.endswith('"'):
-                private_key = private_key[1:-1]
+        if not private_key:
+            return False, "La variable GOOGLE_PRIVATE_KEY est vide ou absente."
+            
+        import re
+        # Nettoyage RADICAL de la clé (gestion des \n, espaces, etc.)
+        private_key = private_key.replace('\\\\n', ' ').replace('\\n', ' ').replace('\\r', ' ')
+        
+        header = "-----BEGIN PRIVATE KEY-----"
+        footer = "-----END PRIVATE KEY-----"
+        
+        content = private_key
+        if header in private_key and footer in private_key:
+            content = private_key.split(header)[1].split(footer)[0]
+        
+        content = re.sub(r'[^A-Za-z0-9+/=]', '', content)
+        missing_padding = len(content) % 4
+        if missing_padding:
+            content += '=' * (4 - missing_padding)
+        
+        lines = [content[i:i+64] for i in range(0, len(content), 64)]
+        private_key = f"{header}\n" + "\n".join(lines) + f"\n{footer}\n"
 
         credentials_info = {
             "type": "service_account",
@@ -49,17 +81,15 @@ def init_vertex():
         creds = service_account.Credentials.from_service_account_info(credentials_info)
         vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
         
-        # MODIFICATION : Utilisation de Gemini 2.5 Flash
         model_name = "gemini-2.5-flash" 
-        
         print(f"⏳ Chargement du modèle {model_name}...")
         model = GenerativeModel(model_name)
-        print("✅ Modèle Vertex AI chargé avec succès.")
-        return True
+        print("✅ Modèle Vertex AI chargé avec succès via Service Account.")
+        return True, ""
     except Exception as e:
         print("❌ ERREUR INITIALISATION VERTEX :")
         print(e)
-        return False
+        return False, str(e)
 
 # Initialisation au démarrage
 init_vertex()
@@ -72,8 +102,9 @@ def ping():
 def scan_image():
     global model
     if model is None:
-        if not init_vertex():
-            return jsonify({"success": False, "error": "Le modèle AI n'est pas chargé (Erreur serveur)"}), 500
+        success, error_msg = init_vertex()
+        if not success:
+            return jsonify({"success": False, "error": f"Initialisation Vertex échouée: {error_msg}"}), 500
 
     if 'image' not in request.files:
         return jsonify({"success": False, "error": "Aucune image envoyée"}), 400
