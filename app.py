@@ -16,10 +16,12 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "us-central1" # Recommandé pour Gemini 3 Preview
+LOCATION = "global" # Reverted to global as it worked locally
 
 def get_client():
     try:
+        print(f"🔧 Starting Vertex AI Config for Project: {PROJECT_ID}")
+        
         # 1. Nettoyage de la clé privée (Source fréquente d'erreurs)
         raw_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
         if not raw_key:
@@ -31,6 +33,9 @@ def get_client():
         
         # Debug (Sécurisé : on n'affiche que le début)
         print(f"🔑 Clé chargée (début): {pk[:15]}...")
+        
+        client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
+        print(f"📧 Service Account Email: {client_email}")
 
         # 2. Création du dictionnaire de credentials
         credentials_info = {
@@ -38,7 +43,7 @@ def get_client():
             "project_id": PROJECT_ID,
             "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
             "private_key": pk,
-            "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
+            "client_email": client_email,
             "client_id": os.getenv("GOOGLE_CLIENT_ID"),
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
@@ -63,6 +68,7 @@ def get_client():
             project=PROJECT_ID,
             location=LOCATION
         )
+        return client
         return client
     except Exception as e:
         print(f"❌ Erreur Init Client Vertex: {str(e)}")
@@ -131,14 +137,11 @@ def scan_image():
     mime = file.content_type or "image/jpeg"
     
     # Modèle à utiliser
-    target_model = "gemini-3-flash-preview"
+    target_model = "gemini-2.5-flash"
     
     try:
-        print(f"🚀 Scan avec {target_model} (us-central1)...")
+        print(f"🚀 Scan avec {target_model} ({LOCATION})...")
         image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-        
-        # Ensure we are using the correct client configuration for the model
-        # Re-verify client supports the location if it was created as global
         
         response = client.models.generate_content(
             model=target_model,
@@ -150,34 +153,13 @@ def scan_image():
 
     except Exception as e:
         error_msg = str(e)
-        print(f"⚠️ Erreur Gemini 3: {error_msg}")
-        
-        # REPLI ROBUSTE : Si Gemini 3 plante, on force le 1.5
-        try:
-            print("🔄 Bascule de secours sur Gemini 1.5 Flash (us-central1)...")
-            
-            # On recrée un client spécifiquement pour us-central1 (plus stable)
-            # Use a fresh client for the fallback to ensure clean state
-            client_fallback = genai.Client(vertexai=True, project=PROJECT_ID, location="us-central1")
-            
-            image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-            response = client_fallback.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=[image_part, "1. Extract all text from this image, without any comments or explanations."]
-            )
-            return jsonify({
-                "success": True, 
-                "text": response.text, 
-                "note": "Fallback to 1.5-flash successful"
-            })
-            
-        except Exception as e2:
-            print(f"❌ Erreur critique Fallback: {str(e2)}")
-            return jsonify({
-                "success": False, 
-                "error": f"Erreur OCR: {error_msg}. Fallback échoué: {str(e2)}",
-                "trace": traceback.format_exc()
-            }), 500
+        print(f"❌ Erreur Gemini 2.5 Flash: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False, 
+            "error": f"Erreur OCR: {error_msg}",
+            "trace": traceback.format_exc()
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
