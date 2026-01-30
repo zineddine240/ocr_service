@@ -1,49 +1,75 @@
 import os
-import json
-import tempfile
+import time
 from flask import Flask, request, jsonify
-from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
-from google import genai
-from google.genai import types
-import traceback
+import vertexai
+from vertexai.generative_models import GenerativeModel, Part
+from google.oauth2 import service_account
 from dotenv import load_dotenv
+from google.api_core.exceptions import ResourceExhausted
 
 load_dotenv()
 
 app = Flask(__name__)
-# CORS : Très permissif pour éviter les blocages
+# Autoriser les requêtes venant de n'importe où (pour le dev)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# --- CONFIGURATION VERTEX AI ---
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-LOCATION = "global" # Reverted to global as it worked locally
+LOCATION = "us-central1" # 'global' n'est pas supporté pour ce modèle 
 
-def get_client():
+print(f"--- Initialisation Vertex AI ({PROJECT_ID}) ---")
+
+model = None
+
+def init_vertex():
+    global model
     try:
-        print(f"🔧 Starting Vertex AI Config for Project: {PROJECT_ID}")
-        
-        # 1. Nettoyage de la clé privée (Source fréquente d'erreurs)
-        raw_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
-        if not raw_key:
-            print("❌ ERREUR: GOOGLE_PRIVATE_KEY est vide sur le serveur !")
-            return None
-            
-        pk = raw_key.replace('\\n', '\n').strip()
-        if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
-        
-        # Debug (Sécurisé : on n'affiche que le début)
-        print(f"🔑 Clé chargée (début): {pk[:15]}...")
-        
-        client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
-        print(f"📧 Service Account Email: {client_email}")
+        # 1. Tentative d'initialisation via Application Default Credentials (ADC)
+        # Indispensable pour Google Cloud Run.
+        try:
+            from google import auth
+            credentials, project = auth.default()
+            print(f"trying to use ADC (Project: {project})...")
+            vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
+            model_name = "gemini-2.5-flash"
+            model = GenerativeModel(model_name)
+            print(f"✅ Modèle Vertex AI ({model_name}) chargé via ADC.")
+            return True, ""
+        except Exception as adc_err:
+            print(f"ℹ️ ADC non disponible (Attendu en local si non connecté via gcloud) : {adc_err}")
+            print("🔄 Passage à l'initialisation manuelle (Service Account Key)...")
 
-        # 2. Création du dictionnaire de credentials
+        # 2. Reconstitution manuelle depuis les variables d'environnement (Fallback pour local/Render)
+        private_key = os.getenv("GOOGLE_PRIVATE_KEY", "")
+        if not private_key:
+            return False, "La variable GOOGLE_PRIVATE_KEY est vide ou absente."
+            
+        import re
+        # Nettoyage RADICAL de la clé (gestion des \n, espaces, etc.)
+        private_key = private_key.replace('\\\\n', ' ').replace('\\n', ' ').replace('\\r', ' ')
+        
+        header = "-----BEGIN PRIVATE KEY-----"
+        footer = "-----END PRIVATE KEY-----"
+        
+        content = private_key
+        if header in private_key and footer in private_key:
+            content = private_key.split(header)[1].split(footer)[0]
+        
+        content = re.sub(r'[^A-Za-z0-9+/=]', '', content)
+        missing_padding = len(content) % 4
+        if missing_padding:
+            content += '=' * (4 - missing_padding)
+        
+        lines = [content[i:i+64] for i in range(0, len(content), 64)]
+        private_key = f"{header}\n" + "\n".join(lines) + f"\n{footer}\n"
+
         credentials_info = {
             "type": "service_account",
             "project_id": PROJECT_ID,
             "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
-            "private_key": pk,
-            "client_email": client_email,
+            "private_key": private_key,
+            "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
             "client_id": os.getenv("GOOGLE_CLIENT_ID"),
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
@@ -52,115 +78,82 @@ def get_client():
             "universe_domain": "googleapis.com"
         }
         
-        # 3. Injection dans un fichier temporaire (Obligatoire pour le SDK google-genai)
-        temp_creds = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
-        json.dump(credentials_info, temp_creds)
-        temp_creds.close()
+        creds = service_account.Credentials.from_service_account_info(credentials_info)
+        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
         
-        # 4. Définition de la variable d'environnement ADC
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_creds.name
-        
-        print(f"✅ Fichier credentials généré: {temp_creds.name}")
-        
-        # 5. Création du client
-        client = genai.Client(
-            vertexai=True,
-            project=PROJECT_ID,
-            location=LOCATION
-        )
-        return client
-        return client
+        model_name = "gemini-2.5-flash" 
+        print(f"⏳ Chargement du modèle {model_name}...")
+        model = GenerativeModel(model_name)
+        print("✅ Modèle Vertex AI chargé avec succès via Service Account.")
+        return True, ""
     except Exception as e:
-        print(f"❌ Erreur Init Client Vertex: {str(e)}")
-        # On log l'erreur complète pour la voir dans Render
-        print(traceback.format_exc())
-        return None
+        print("❌ ERREUR INITIALISATION VERTEX :")
+        print(e)
+        return False, str(e)
 
-client = get_client()
+# Initialisation au démarrage
+init_vertex()
 
-@app.after_request
-def add_cors(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
-
-@app.route('/', methods=['GET'])
-def health():
-    return jsonify({
-        "status": "online", 
-        "mode": "vertex-ai",
-        "client_ready": client is not None
-    })
-
-@app.errorhandler(500)
-def internal_error(error):
-    response = jsonify({
-        "success": False,
-        "error": "Internal Server Error",
-        "details": str(error)
-    })
-    response.status_code = 500
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    # Pass through HTTP errors
-    if isinstance(e, HTTPException):
-        return e
-    # Now you're handling non-HTTP exceptions only
-    print(f"❌ Unhandled Exception: {str(e)}")
-    print(traceback.format_exc())
-    response = jsonify({
-        "success": False,
-        "error": "Unhandled Exception",
-        "details": str(e)
-    })
-    response.status_code = 500
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
+@app.route('/ping', methods=['GET'])
+def ping():
+    return "pong"
 
 @app.route('/scan', methods=['POST'])
 def scan_image():
-    global client
-    
-    # Tentative de ré-init si perdu
-    if not client:
-        client = get_client()
-        if not client:
-            return jsonify({"success": False, "error": "Server Credential Error. Check Render Logs."}), 500
+    global model
+    if model is None:
+        success, error_msg = init_vertex()
+        if not success:
+            return jsonify({"success": False, "error": f"Initialisation Vertex échouée: {error_msg}"}), 500
 
     if 'image' not in request.files:
-        return jsonify({"success": False, "error": "Aucune image reçue"}), 400
+        return jsonify({"success": False, "error": "Aucune image envoyée"}), 400
 
     file = request.files['image']
-    img_bytes = file.read()
-    mime = file.content_type or "image/jpeg"
-    
-    # Modèle à utiliser
-    target_model = "gemini-2.5-flash"
     
     try:
-        print(f"🚀 Scan avec {target_model} ({LOCATION})...")
-        image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+        # Lecture de l'image
+        img_bytes = file.read()
         
-        response = client.models.generate_content(
-            model=target_model,
-            contents=[image_part, "1. Extract all text from this image, without any comments or explanations."],
-            config=types.GenerateContentConfig(temperature=0)
+        # Préparation pour Vertex AI
+        image_part = Part.from_data(
+            data=img_bytes, 
+            mime_type=file.content_type if file.content_type else "image/jpeg"
         )
+
+        prompt = "Extract all text from this image exactly as it appears. No markdown, no comments."
+
+        print("🚀 Envoi à Vertex AI (Gemini 2.5 Flash)...")
+        start_time = time.time()
         
-        return jsonify({"success": True, "text": response.text})
+        response = None
+        for attempt in range(4): # Try 4 times (Initial + 3 retries)
+            try:
+                response = model.generate_content([prompt, image_part])
+                break
+            except ResourceExhausted:
+                if attempt == 3:
+                    raise # Re-raise if last attempt
+                wait_time = 2 ** attempt
+                print(f"⚠️ Quota dépassé (429), nouvelle tentative dans {wait_time}s...")
+                time.sleep(wait_time)
+            except Exception as e:
+                raise e
+
+        final_text = response.text
+        duration = time.time() - start_time
+        print(f"✅ Réponse reçue en {duration:.2f}s !")
+        
+        return jsonify({
+            "success": True, 
+            "text": final_text.strip(),
+            "time": f"{duration:.2f}s"
+        })
 
     except Exception as e:
-        error_msg = str(e)
-        print(f"❌ Erreur Gemini 2.5 Flash: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({
-            "success": False, 
-            "error": f"Erreur OCR: {error_msg}",
-            "trace": traceback.format_exc()
-        }), 500
+        print(f"❌ ERREUR PENDANT LE SCAN : {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
