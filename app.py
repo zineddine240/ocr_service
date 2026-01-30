@@ -121,7 +121,7 @@ def scan_image():
             mime_type=file.content_type if file.content_type else "image/jpeg"
         )
 
-        prompt = "Extract all text from this image exactly as it appears. No markdown, no comments."
+        prompt = "Extract all text from this image exactly. whitout any comments or explanation."
 
         print("🚀 Envoi à Vertex AI (Gemini 2.5 Flash)...")
         start_time = time.time()
